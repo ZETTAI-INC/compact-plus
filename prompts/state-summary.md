@@ -22,6 +22,11 @@ Inputs are structured as:
 
 Use internal update reasoning to add new decisions, blockers, files, workers, failures, or recovery facts introduced in new events; revise existing entries whose status, owner, file path, decision, blocker, or verification result changed; and keep existing facts that new events do not touch, especially facts matching the user's custom instructions. These internal operations correspond to ADD / UPDATE / PRESERVE, but those labels are not output format.
 
+Existing state may include appended `## Compact Prep Update` notes in chronological
+order. Consolidate them into the ten sections: newer explicit corrections and
+cancellations supersede older statements about the same topic. Preserve other
+facts. Do not emit the update headings in the consolidated state.
+
 Priority: honor user's custom_instructions if provided. Treat them as a relevance filter for what must survive compaction, while staying factual.
 
 Always output these headings in this exact order:

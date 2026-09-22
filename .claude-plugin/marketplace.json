@@ -3,13 +3,13 @@
   "owner": { "name": "ZETTAI-INC" },
   "metadata": {
     "description": "Standalone compact-plus: save and recover Claude Code session state around compaction.",
-    "version": "2.0.1"
+    "version": "2.0.2"
   },
   "plugins": [
     {
       "name": "compact-plus",
       "description": "Session state preservation with freshness checks, background pre-generation, and recovery hooks.",
-      "version": "2.0.1",
+      "version": "2.0.2",
       "author": { "name": "u1 (v2 patches: ZETTAI-INC)" },
       "source": "./"
     }

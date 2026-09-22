@@ -72,8 +72,17 @@ Restart Claude Code after installation. Temporary state follows `$TMPDIR`,
 which is usually different from `/tmp` on macOS.
 
 At `/compact`, background state is reused only when there are no unsaved
-transcript bytes. Even a short new decision triggers an update, and the
-transcript size is checked again after waiting for background generation.
+transcript bytes. Otherwise only the new events are sent to the delta writer,
+and its short `## Compact Prep Update` is appended to the existing state.
+The base summary is neither sent nor rewritten. Delta input does not use the
+tail byte cap, so early decisions in the delta are retained. Large deltas and
+the LLM call itself can still take time. The transcript size is checked again
+after waiting for background generation.
+
+Recovery reads the base and all updates in chronological order, with newer
+explicit changes and cancellations taking precedence. The next background run
+consolidates the updates into the base summary. Initial builds, invalid offsets,
+and explicit `/compact ...` guidance still use the full-state writer.
 Backend failures and lock timeouts still fail open, so a current state summary
 is not guaranteed in those cases. A separate PreCompact hook backs up the raw
 transcript.
@@ -148,6 +157,8 @@ Example disabling the fallback:
 | `COMPACT_PLUS_SQUASH_BASH_CHARS` | `500` | Replaces Bash output above N characters with `[Bash: exit code, N chars output]` |
 | `COMPACT_PLUS_TWO_PASS` | `1` | Enables or disables two-pass self-critique |
 | `COMPACT_PLUS_FRESH_DELTA_KB` | `300` | Legacy compatibility: positive values reuse state only with zero unsaved bytes; `0` disables reuse |
+| `COMPACT_PLUS_DELTA_EFFORT` | `low` | Delta writer effort, for backends using `$COMPACT_PLUS_EFFORT` |
+| `COMPACT_PLUS_DELTA_MAX_OUTPUT_TOKENS` | `1024` | Delta output budget passed in the prompt and `$MAX_OUTPUT_TOKENS`; strict enforcement depends on the backend |
 
 ### Warn Threshold
 

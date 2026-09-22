@@ -13,6 +13,7 @@ trap 'exit 0' ERR
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PLUGIN_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 PROMPT_FILE="$PLUGIN_ROOT/prompts/state-summary.md"
+DELTA_PROMPT_FILE="$PLUGIN_ROOT/prompts/state-delta.md"
 
 STATE_DIR="${TMPDIR:-/tmp}/claude-compact-state" # lint:allow-os-tmp
 OFFSET_DIR="${TMPDIR:-/tmp}/claude-compact-state-offset" # lint:allow-os-tmp
@@ -36,6 +37,9 @@ COMPACT_PLUS_FRESH_DELTA_KB="${COMPACT_PLUS_FRESH_DELTA_KB:-300}"
 COMPACT_PLUS_LOCK_WAIT_SEC="${COMPACT_PLUS_LOCK_WAIT_SEC:-150}"
 COMPACT_PLUS_LOCK_STALE_MIN="${COMPACT_PLUS_LOCK_STALE_MIN:-15}"
 COMPACT_PLUS_EFFORT="${COMPACT_PLUS_EFFORT:-medium}"
+COMPACT_PLUS_DELTA_EFFORT="${COMPACT_PLUS_DELTA_EFFORT:-low}"
+COMPACT_PLUS_DELTA_MAX_OUTPUT_TOKENS="${COMPACT_PLUS_DELTA_MAX_OUTPUT_TOKENS:-1024}"
+EXPECTED_HEADING="# Compact Prep State"
 
 DEFAULT_PRIMARY_BACKEND='claude -p --model claude-sonnet-5 --effort "${COMPACT_PLUS_EFFORT:-medium}" --permission-mode dontAsk --output-format text --no-session-persistence --system-prompt "$SYSTEM_PROMPT"'
 PRIMARY_CMD="${COMPACT_PLUS_PRIMARY_BACKEND-$DEFAULT_PRIMARY_BACKEND}"
@@ -333,7 +337,7 @@ build_user_prompt() {
     printf 'active_plan: %s\n' "$active_plan_path"
   fi
   printf '\nExisting state (from previous /compact):\n'
-  if state_is_valid && [[ "$mode" == "incremental" ]]; then
+  if state_is_valid; then
     cat "$STATE_FILE"
   else
     printf '(none)\n'
@@ -345,6 +349,15 @@ build_user_prompt() {
   printf 'Priority: honor user custom_instructions if provided.\n'
 }
 
+build_delta_prompt() {
+  printf 'session_id: %s\n' "$SESSION_ID"
+  printf 'transcript_path: %s\n' "$TRANSCRIPT_PATH"
+  printf 'mode: delta\n'
+  printf 'transcript_bytes: %s-%s\n' "$((OFFSET + 1))" "$TRANSCRIPT_SIZE"
+  printf 'output_token_budget: %s\n' "$COMPACT_PLUS_DELTA_MAX_OUTPUT_TOKENS"
+  printf '\nNew events since the saved state:\n%s\n' "$EVENTS"
+}
+
 run_backend_if_set() {
   local cmd="$1"
   local user_prompt="$2"
@@ -353,7 +366,7 @@ run_backend_if_set() {
   [[ -n "$cmd" ]] || return 1
 
   if output=$(SYSTEM_PROMPT="$SYSTEM_PROMPT" SESSION_ID="$SESSION_ID" TRANSCRIPT_PATH="$TRANSCRIPT_PATH" MAX_OUTPUT_TOKENS="$COMPACT_PLUS_MAX_OUTPUT_TOKENS" COMPACT_PLUS_EFFORT="$COMPACT_PLUS_EFFORT" bash -c "$cmd" <<< "$user_prompt" 2>/dev/null); then
-    if [[ "$(printf '%s\n' "$output" | head -n 1)" == "# Compact Prep State" ]]; then
+    if [[ "$(printf '%s\n' "$output" | head -n 1)" == "$EXPECTED_HEADING" ]]; then
       printf '%s\n' "$output"
       return 0
     fi
@@ -444,7 +457,22 @@ MODE="$COMPACT_PLUS_TRANSCRIPT_MODE"
 EVENTS=""
 OFFSET=0
 
+# Synchronous compaction appends a small summary of only the unsaved events.
+# Background runs consolidate the full state; explicit /compact guidance needs
+# the existing state too, so it continues to use the full writer.
+if [[ "$TRIGGER" != "background" && -z "$CUSTOM_INSTRUCTIONS" ]] && state_is_valid && offset_is_valid; then
+  OFFSET=$(read_offset)
+  if [[ "$OFFSET" -lt "$TRANSCRIPT_SIZE" ]]; then
+    MODE="delta"
+  fi
+fi
+
 case "$MODE" in
+  delta)
+    # Bound the read to the captured offset, without dropping the start of the
+    # delta via the usual tail cap. Later appends remain unsaved for the next run.
+    EVENTS=$(head -c "$TRANSCRIPT_SIZE" "$TRANSCRIPT_PATH" | tail -c +"$((OFFSET + 1))" | process_transcript_stream)
+    ;;
   tail)
     EVENTS=$(semantic_tail "$TRANSCRIPT_PATH")
     MODE="tail"
@@ -474,16 +502,32 @@ case "$MODE" in
     ;;
 esac
 
-SYSTEM_PROMPT=$(cat "$PROMPT_FILE")
-SKILLS_INVOKED_LIST=$(collect_skills_invoked)
-USER_PROMPT=$(build_user_prompt "$MODE" "$EVENTS")
+if [[ "$MODE" == "delta" ]]; then
+  SYSTEM_PROMPT=$(cat "$DELTA_PROMPT_FILE")
+  EXPECTED_HEADING="## Compact Prep Update"
+  COMPACT_PLUS_EFFORT="$COMPACT_PLUS_DELTA_EFFORT"
+  COMPACT_PLUS_MAX_OUTPUT_TOKENS="$COMPACT_PLUS_DELTA_MAX_OUTPUT_TOKENS"
+  USER_PROMPT=$(build_delta_prompt)
+else
+  SYSTEM_PROMPT=$(cat "$PROMPT_FILE")
+  SKILLS_INVOKED_LIST=$(collect_skills_invoked)
+  USER_PROMPT=$(build_user_prompt "$MODE" "$EVENTS")
+fi
 
 OUTPUT=$(run_backends "$USER_PROMPT" || true)
 [[ -n "$OUTPUT" ]] || exit 0
 
-TMP_FILE=$(mktemp "${TMPDIR:-/tmp}/compact-plus-state.XXXXXX") # lint:allow-os-tmp
-printf '%s\n' "$OUTPUT" > "$TMP_FILE"
-mv "$TMP_FILE" "$STATE_FILE" 2>/dev/null || true
+TMP_FILE=$(mktemp "$STATE_DIR/.compact-plus-state.XXXXXX")
+if [[ "$MODE" == "delta" ]]; then
+  cat "$STATE_FILE" > "$TMP_FILE"
+  printf '\n%s\n' "$OUTPUT" >> "$TMP_FILE"
+else
+  printf '%s\n' "$OUTPUT" > "$TMP_FILE"
+fi
+if ! mv "$TMP_FILE" "$STATE_FILE" 2>/dev/null; then
+  rm -f "$TMP_FILE" 2>/dev/null || true
+  exit 0
+fi
 printf '%s\n' "$TRANSCRIPT_SIZE" > "$OFFSET_FILE" 2>/dev/null || true
 printf '%s\n' "$CALL_COUNT" > "$COUNTER_FILE" 2>/dev/null || true
 

@@ -28,8 +28,16 @@ Codex を超えるセッション継続 (state 保存 + 復旧誘導 + skill 復
 - 復旧メモを厚く残したい時は圧縮直前に `/compact-plus` を明示的に呼ぶと、agent 自身が構造化 state を書く手動 fallback 経路に入る
 
 バックグラウンドで作成した state は、未保存の transcript 差分がない場合だけ
-`/compact` 時に再利用する。短い方針変更でも差分があれば更新し、生成待ちの間に
-増えた内容も再確認する。LLM 呼び出しの失敗やロック待ちのタイムアウト時は、
+`/compact` 時にそのまま再利用する。差分があれば、その差分だけを AI に渡し、
+短い `## Compact Prep Update` として既存 state の末尾へ追記する。
+既存の要約全体の送信・書き直しは行わず、差分先頭の決定事項が落ちないよう
+差分経路には tail の byte cap を適用しない。差分が大きい場合や AI 呼び出し自体には
+待ち時間が発生する。生成待ちの間に増えた内容も再確認する。
+
+復元時は基本の要約と追記を時系列で読み、新しい変更・撤回を優先する。
+次のバックグラウンド生成では追記を基本の要約へ統合する。初回・offset 不正時・
+明示的な `/compact ...` 引数がある場合は、従来の全体要約を使う。
+LLM 呼び出しの失敗やロック待ちのタイムアウト時は、
 従来どおり圧縮を妨げずに終了するため、最新の state 保存は保証されない。
 会話原文のバックアップは別の PreCompact hook が担当する。
 
@@ -146,6 +154,8 @@ fallback を無効化する例:
 | `COMPACT_PLUS_SQUASH_BASH_CHARS` | `500` | Bash tool `> N` chars で `[Bash: exit code, N chars output]` に置換 |
 | `COMPACT_PLUS_TWO_PASS` | `1` | 2-pass self-critique on/off |
 | `COMPACT_PLUS_FRESH_DELTA_KB` | `300` | 旧設定との互換用。正の値では未保存差分がゼロの場合のみ再利用。`0` で再利用を無効化 |
+| `COMPACT_PLUS_DELTA_EFFORT` | `low` | 差分要約時の effort。backend が `$COMPACT_PLUS_EFFORT` を参照する場合に有効 |
+| `COMPACT_PLUS_DELTA_MAX_OUTPUT_TOKENS` | `1024` | 差分要約の出力量の目安。prompt と `$MAX_OUTPUT_TOKENS` に渡す。厳密な制限は backend 次第 |
 
 ### warn 閾値
 

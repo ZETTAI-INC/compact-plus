@@ -45,6 +45,7 @@ STATE_DIR="${TMPDIR:-/tmp}/claude-compact-state" # lint:allow-os-tmp
 STATE_FILE="$STATE_DIR/$SESSION_ID.md"
 INJECT_MAX=$(( ${COMPACT_PLUS_INJECT_MAX_KB:-16} * 1024 ))
 if [[ -f "$STATE_FILE" ]]; then
+  CTX+=$'\n'"- The state may contain chronological Compact Prep Update notes after the base summary. Read all updates; newer explicit changes and cancellations supersede older statements on the same topic, while unrelated facts remain valid."
   STATE_SIZE=$(wc -c < "$STATE_FILE" 2>/dev/null | tr -d ' ')
   [[ "$STATE_SIZE" =~ ^[0-9]+$ ]] || STATE_SIZE=$((INJECT_MAX + 1))
   if [[ "$STATE_SIZE" -le "$INJECT_MAX" ]]; then
