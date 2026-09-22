@@ -50,8 +50,8 @@ LLM 呼び出しの失敗やロック待ちのタイムアウト時は、
 
 ## Installation
 
-共有元の marketplace を追加してから plugin をインストールする。
-private リポジトリへの読み取り権限と、GitHub に認証済みの git が必要。
+公開 marketplace を追加してから plugin をインストールする。
+Git のインストールは必要だが、リポジトリの取得に GitHub 認証は不要。
 
 ```bash
 claude plugin marketplace add ZETTAI-INC/compact-plus

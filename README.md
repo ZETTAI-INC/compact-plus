@@ -36,8 +36,8 @@ Optional enhancements:
 
 ## Installation
 
-Add the shared marketplace, then install the plugin. Git must be authenticated
-with a GitHub account that has read access to this private repository.
+Add the public marketplace, then install the plugin. Git must be installed;
+GitHub authentication is not required to download this repository.
 
 ```bash
 claude plugin marketplace add ZETTAI-INC/compact-plus
