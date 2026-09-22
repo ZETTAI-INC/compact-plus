@@ -27,6 +27,12 @@ Codex を超えるセッション継続 (state 保存 + 復旧誘導 + skill 復
 - `/compact 重要な設計判断は必ず残して` のように引数を付けると、その内容が state 生成 LLM への priority guidance になる
 - 復旧メモを厚く残したい時は圧縮直前に `/compact-plus` を明示的に呼ぶと、agent 自身が構造化 state を書く手動 fallback 経路に入る
 
+バックグラウンドで作成した state は、未保存の transcript 差分がない場合だけ
+`/compact` 時に再利用する。短い方針変更でも差分があれば更新し、生成待ちの間に
+増えた内容も再確認する。LLM 呼び出しの失敗やロック待ちのタイムアウト時は、
+従来どおり圧縮を妨げずに終了するため、最新の state 保存は保証されない。
+会話原文のバックアップは別の PreCompact hook が担当する。
+
 ## 前提
 
 - Claude Code v2.x 以降
@@ -46,6 +52,23 @@ claude plugin install compact-plus@zettai-compact-plus
 
 Bash（Windows は Git Bash）と `jq` を用意し、インストール後に Claude Code を再起動する。
 使用する LLM backend にログインし、利用可能なモデルを [backend 上書き](#backend-上書き) で設定する。
+
+### macOS
+
+Mac 標準の `/bin/bash`（3.2）で動作する。Bash の更新は不要。
+ターミナルで `jq --version` を確認し、未導入の場合は Homebrew の
+`brew install jq` でインストールする。上記の plugin インストール手順は
+Apple Silicon / Intel Mac 共通。
+
+ローカルで修正したコードを使う場合は、リポジトリ内で次を実行する。
+
+```bash
+claude plugin marketplace add "$PWD"
+claude plugin install compact-plus@zettai-compact-plus
+```
+
+Claude Code を再起動すると有効になる。Mac の一時保存先は `$TMPDIR` に従うため、
+state file が常に `/tmp` にあるとは限らない。
 
 このリポジトリは survival-kit から compact-plus だけを切り出したもの。
 statusline・watcher reaper・Codex 設定は同梱しない。使用率に応じた compact 推奨通知には、
@@ -122,6 +145,7 @@ fallback を無効化する例:
 | `COMPACT_PLUS_SQUASH_READ_LINES` | `100` | Read tool `> N` 行で `[Read: N lines from path]` に置換 |
 | `COMPACT_PLUS_SQUASH_BASH_CHARS` | `500` | Bash tool `> N` chars で `[Bash: exit code, N chars output]` に置換 |
 | `COMPACT_PLUS_TWO_PASS` | `1` | 2-pass self-critique on/off |
+| `COMPACT_PLUS_FRESH_DELTA_KB` | `300` | 旧設定との互換用。正の値では未保存差分がゼロの場合のみ再利用。`0` で再利用を無効化 |
 
 ### warn 閾値
 
@@ -185,4 +209,5 @@ python3 -m json.tool .claude-plugin/plugin.json >/dev/null
 python3 -m json.tool .claude-plugin/marketplace.json >/dev/null
 python3 -m json.tool hooks/hooks.json >/dev/null
 for script in hooks/*.sh scripts/*.sh; do bash -n "$script" || exit; done
+python3 -m unittest discover -s tests -v
 ```

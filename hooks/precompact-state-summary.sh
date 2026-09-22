@@ -5,7 +5,7 @@
 # compact-plus-fix v2 (2026-07-23): freshness gate + generation lock + background
 # pre-generation. The reminder hook launches this script with trigger="background"
 # while the session is still growing, so the synchronous PreCompact run can skip
-# the ~90s nested-claude generation when the saved state is already fresh enough.
+# the ~90s nested-claude generation only when no transcript bytes are unsaved.
 
 set -euo pipefail
 trap 'exit 0' ERR
@@ -29,9 +29,9 @@ COMPACT_PLUS_SQUASH_ENABLED="${COMPACT_PLUS_SQUASH_ENABLED:-1}"
 COMPACT_PLUS_SQUASH_READ_LINES="${COMPACT_PLUS_SQUASH_READ_LINES:-100}"
 COMPACT_PLUS_SQUASH_BASH_CHARS="${COMPACT_PLUS_SQUASH_BASH_CHARS:-500}"
 COMPACT_PLUS_TWO_PASS="${COMPACT_PLUS_TWO_PASS:-1}"
-# v2 knobs: skip regeneration when the raw-transcript delta since the last
-# generation is below FRESH_DELTA_KB (0 disables the gate). LOCK_* guard against
-# a synchronous run racing a background run of this same script.
+# FRESH_DELTA_KB is retained for compatibility: 0 disables reuse; positive
+# values only allow reuse with zero unsaved bytes, never a nonzero delta.
+# LOCK_* guard against a synchronous run racing a background run.
 COMPACT_PLUS_FRESH_DELTA_KB="${COMPACT_PLUS_FRESH_DELTA_KB:-300}"
 COMPACT_PLUS_LOCK_WAIT_SEC="${COMPACT_PLUS_LOCK_WAIT_SEC:-150}"
 COMPACT_PLUS_LOCK_STALE_MIN="${COMPACT_PLUS_LOCK_STALE_MIN:-15}"
@@ -386,8 +386,8 @@ state_is_fresh() {
   offset_is_valid || return 1
   local off
   off=$(read_offset)
-  [[ "$TRANSCRIPT_SIZE" -ge "$off" ]] || return 1
-  [[ $((TRANSCRIPT_SIZE - off)) -lt $((COMPACT_PLUS_FRESH_DELTA_KB * 1024)) ]]
+  TRANSCRIPT_SIZE=$(wc -c < "$TRANSCRIPT_PATH" | tr -d ' ')
+  [[ "$TRANSCRIPT_SIZE" -eq "$off" ]]
 }
 
 lock_is_stale() {
@@ -407,7 +407,7 @@ if [[ "$TRIGGER" == "background" ]]; then
   fi
 else
   # Synchronous PreCompact: skip the expensive generation when the saved state
-  # is fresh enough. Custom /compact instructions always force a regeneration
+  # covers every transcript byte. Custom /compact instructions force regeneration
   # so the user's focus request is honored.
   if [[ -z "$CUSTOM_INSTRUCTIONS" ]] && state_is_fresh; then
     exit 0
@@ -422,7 +422,8 @@ else
       if lock_is_stale; then
         rm -rf "$LOCK_DIR" 2>/dev/null || exit 0
       else
-        # A live background run is still writing; its result will be fresh.
+        # Fail open on lock timeout. The background result may still be stale;
+        # do not advance the offset or claim the latest events were saved.
         exit 0
       fi
     elif [[ -z "$CUSTOM_INSTRUCTIONS" ]] && state_is_fresh; then
@@ -436,6 +437,8 @@ mkdir "$LOCK_DIR" 2>/dev/null || exit 0
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 # ---- end compact-plus-fix v2 ----
 
+# The transcript may have grown while we waited for a background generation.
+TRANSCRIPT_SIZE=$(wc -c < "$TRANSCRIPT_PATH" | tr -d ' ')
 CALL_COUNT=$(next_counter)
 MODE="$COMPACT_PLUS_TRANSCRIPT_MODE"
 EVENTS=""

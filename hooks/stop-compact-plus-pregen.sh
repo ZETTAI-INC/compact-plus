@@ -54,7 +54,9 @@ LOCK_DIR="${TMPDIR:-/tmp}/claude-compact-state-lock/$SESSION_ID.lock" # lint:all
 # A generation is already in flight.
 [[ -d "$LOCK_DIR" ]] && exit 0
 
-printf -v NOW '%(%s)T' -1
+# date works with stock macOS Bash 3.2 as well as Linux and Git Bash.
+# Bash's printf time format requires Bash 4.2 or later.
+NOW=$(date +%s) || exit 0
 if [[ -f "$KICK_FILE" ]]; then
   LAST=$(cat "$KICK_FILE" 2>/dev/null || printf '0')
   [[ "$LAST" =~ ^[0-9]+$ ]] || LAST=0

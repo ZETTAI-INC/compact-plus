@@ -55,6 +55,29 @@ PreCompact state capture and post-compaction recovery use the bundled hooks.
 These hooks target Claude Code; using Codex as an LLM backend does not install
 this plugin into Codex itself.
 
+### macOS
+
+The hooks support the stock macOS `/bin/bash` (3.2); no Bash upgrade is needed.
+Check `jq --version`, and install it with `brew install jq` if missing.
+The installation commands above work on both Apple Silicon and Intel Macs.
+
+To install a locally modified checkout, run from the repository directory:
+
+```bash
+claude plugin marketplace add "$PWD"
+claude plugin install compact-plus@zettai-compact-plus
+```
+
+Restart Claude Code after installation. Temporary state follows `$TMPDIR`,
+which is usually different from `/tmp` on macOS.
+
+At `/compact`, background state is reused only when there are no unsaved
+transcript bytes. Even a short new decision triggers an update, and the
+transcript size is checked again after waiting for background generation.
+Backend failures and lock timeouts still fail open, so a current state summary
+is not guaranteed in those cases. A separate PreCompact hook backs up the raw
+transcript.
+
 ## Configuration
 
 Following the Claude Code plugin model, write environment variables under the `env` block in `~/.claude/settings.json`. For temporary per-session overrides, shell `export` also works.
@@ -124,6 +147,7 @@ Example disabling the fallback:
 | `COMPACT_PLUS_SQUASH_READ_LINES` | `100` | Replaces Read tool output above N lines with `[Read: N lines from path]` |
 | `COMPACT_PLUS_SQUASH_BASH_CHARS` | `500` | Replaces Bash output above N characters with `[Bash: exit code, N chars output]` |
 | `COMPACT_PLUS_TWO_PASS` | `1` | Enables or disables two-pass self-critique |
+| `COMPACT_PLUS_FRESH_DELTA_KB` | `300` | Legacy compatibility: positive values reuse state only with zero unsaved bytes; `0` disables reuse |
 
 ### Warn Threshold
 
@@ -189,4 +213,5 @@ python3 -m json.tool .claude-plugin/plugin.json >/dev/null
 python3 -m json.tool .claude-plugin/marketplace.json >/dev/null
 python3 -m json.tool hooks/hooks.json >/dev/null
 for script in hooks/*.sh scripts/*.sh; do bash -n "$script" || exit; done
+python3 -m unittest discover -s tests -v
 ```
