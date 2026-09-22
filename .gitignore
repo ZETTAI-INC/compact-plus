@@ -1,0 +1,5 @@
+.in_use/
+.env
+.env.*
+__pycache__/
+*.pyc

@@ -1,0 +1,192 @@
+# compact-plus
+
+[Japanese README](./README.ja.md)
+
+A transparent Claude Code plugin that raises `/compact` session continuity (state capture, recovery guidance, and skill recall) above Codex CLI parity. It does not replace Claude Code's compaction algorithm — it augments compaction through the documented hook surface.
+
+## What It Does
+
+- Backs up the transcript before compaction and writes a 10-section state file with an LLM
+- Injects the state file, plan file, and original-source reminder after compaction through `additionalContext`
+- Recovers the list of skills invoked earlier in the session — a mechanism not present in the Codex CLI baseline
+- When context usage crosses a configured threshold (default 60%), the next user prompt receives a suggestion to run `/compact`
+- Alongside that reminder, the plugin injects a three-line recitation (Active Plan, Current Phase, and the most recent Session Decision from the state file) into `additionalContext`, so the agent keeps its bearings during the last few turns before compaction actually runs. This does not change the compaction algorithm itself; it is a focus aid that reduces late-session drift between warn and the real `/compact`
+- Provides the `/compact-plus` skill for manual state capture
+
+## Usage
+
+After installation, just run `/compact` as usual. **No additional action is required** — the flow is fully transparent.
+
+- Both manual `/compact` and auto-compaction trigger the same hook path
+- Before compaction: the PreCompact hook automatically backs up the transcript and generates the 10-section state file
+- After compaction: recovery guidance is automatically injected into `additionalContext` through the UserPromptSubmit hook on the next user prompt
+- The agent does not need to call any specific skill or perform any preparation
+
+Optional enhancements:
+
+- Pass an instruction such as `/compact keep the security-related decisions` to send priority guidance to the state-generation LLM
+- Invoke `/compact-plus` manually right before compaction if you want to leave richer recovery notes; this switches to the fallback path where the agent writes the structured state itself
+
+## Requirements
+
+- Claude Code v2.x or later
+- An LLM backend through `claude -p` or `codex exec`
+- The default configuration uses `claude -p --model claude-sonnet-5 --effort medium` as the primary backend and `codex exec --model gpt-5.3-codex-spark` as the fallback backend
+- The Codex Spark fallback assumes ChatGPT Pro access. You can switch the fallback to models such as `gpt-5.4` or `gpt-5.5`
+
+## Installation
+
+Add the shared marketplace, then install the plugin. Git must be authenticated
+with a GitHub account that has read access to this private repository.
+
+```bash
+claude plugin marketplace add ZETTAI-INC/compact-plus
+claude plugin install compact-plus@zettai-compact-plus
+```
+
+Install Bash (Git Bash on Windows) and `jq`, then restart Claude Code after plugin
+installation. Authenticate the selected LLM backend and configure a model your
+account can use under [Backend Overrides](#backend-overrides).
+
+This repository contains only compact-plus from the survival kit. The statusline,
+watcher reaper, and Codex configuration are not bundled. Compaction reminders
+require a separate statusline to write the warning marker described below;
+PreCompact state capture and post-compaction recovery use the bundled hooks.
+These hooks target Claude Code; using Codex as an LLM backend does not install
+this plugin into Codex itself.
+
+## Configuration
+
+Following the Claude Code plugin model, write environment variables under the `env` block in `~/.claude/settings.json`. For temporary per-session overrides, shell `export` also works.
+
+### Backend Overrides
+
+Two environment variables replace the primary and fallback commands as whole shell commands.
+
+| env var | Meaning |
+|---|---|
+| `COMPACT_PLUS_PRIMARY_BACKEND` | Complete shell command for the primary backend. Set to an empty string (`""`) to skip the primary backend |
+| `COMPACT_PLUS_FALLBACK_BACKEND` | Complete shell command for the fallback backend. Set to an empty string to skip the fallback backend |
+
+Environment variables available inside those commands:
+
+- `$SYSTEM_PROMPT`: the LLM system prompt from `prompts/state-summary.md`
+- `$SESSION_ID`: Claude Code session id
+- `$TRANSCRIPT_PATH`: transcript JSONL path
+- `$MAX_OUTPUT_TOKENS`: LLM output cap
+
+Default values are embedded in `hooks/precompact-state-summary.sh`.
+
+Example `~/.claude/settings.json` override for a lower-cost Haiku backend:
+
+```json
+{
+  "env": {
+    "COMPACT_PLUS_PRIMARY_BACKEND": "claude -p --model claude-haiku-4-5-20251001 --effort low --permission-mode dontAsk --output-format text --no-session-persistence --system-prompt \"$SYSTEM_PROMPT\""
+  }
+}
+```
+
+Example replacing the primary backend with Codex Spark (requires ChatGPT Pro; served through Cerebras for higher throughput):
+
+```json
+{
+  "env": {
+    "COMPACT_PLUS_PRIMARY_BACKEND": "tmp=$(mktemp \"${TMPDIR:-/tmp}/compact-plus-codex.XXXXXX\"); { printf \"%s\\n\\n\" \"$SYSTEM_PROMPT\"; cat; } | codex exec --model gpt-5.3-codex-spark --sandbox read-only --skip-git-repo-check --dangerously-bypass-hook-trust --ignore-user-config --ephemeral --output-last-message \"$tmp\" - >/dev/null && cat \"$tmp\"; status=$?; rm -f \"$tmp\"; exit \"$status\""
+  }
+}
+```
+
+Codex output can prepend a CLI preamble to stdout, so `--output-last-message "$tmp"` is used to capture only the final message. This mirrors the default fallback implementation.
+
+Example disabling the fallback:
+
+```json
+{
+  "env": {
+    "COMPACT_PLUS_FALLBACK_BACKEND": ""
+  }
+}
+```
+
+### Transcript, Squash, and Two-Pass Tuning
+
+| env var | default | Meaning |
+|---|---|---|
+| `COMPACT_PLUS_TRANSCRIPT_MODE` | `incremental` | Transcript selection mode: `incremental`, `head-tail`, or `tail` |
+| `COMPACT_PLUS_TRANSCRIPT_HEAD_TURNS` | `5` | Number of turns to keep from the head side |
+| `COMPACT_PLUS_TRANSCRIPT_TAIL_TURNS` | `25` | Number of turns to keep from the tail side |
+| `COMPACT_PLUS_TRANSCRIPT_HEAD_KB` | `10` | Head-side byte cap in KB |
+| `COMPACT_PLUS_TRANSCRIPT_TAIL_KB` | `40` | Tail-side byte cap in KB |
+| `COMPACT_PLUS_INCREMENTAL_REFRESH` | `10` | Full rebuild every N runs. Set `0` to disable |
+| `COMPACT_PLUS_MAX_OUTPUT_TOKENS` | `4096` | LLM output cap for backends that read it |
+| `COMPACT_PLUS_SQUASH_ENABLED` | `1` | Enables or disables tool result squash |
+| `COMPACT_PLUS_SQUASH_READ_LINES` | `100` | Replaces Read tool output above N lines with `[Read: N lines from path]` |
+| `COMPACT_PLUS_SQUASH_BASH_CHARS` | `500` | Replaces Bash output above N characters with `[Bash: exit code, N chars output]` |
+| `COMPACT_PLUS_TWO_PASS` | `1` | Enables or disables two-pass self-critique |
+
+### Warn Threshold
+
+Set `COMPACT_WARN_THRESHOLD` (default `60`) in the `settings.json` `env` block to change when the statusline emits a warn marker. This setting belongs to the base repository `home/hooks/claude/statusline.sh`, not to the compact-plus plugin itself.
+
+### `/compact` Arguments
+
+When you pass natural-language instructions, such as `/compact keep the important design decisions`, compact-plus forwards those instructions to the state-generation LLM as priority guidance.
+
+## Runtime Flow
+
+1. **PreCompact hook**
+   - `precompact-transcript-backup.sh` copies the transcript JSONL to `~/.claude/backups/transcripts/`
+   - `precompact-state-summary.sh` applies semantic chunking and tool output squash to the transcript, then calls the primary or fallback backend and writes the 10-section state file
+2. **PostCompact hook**
+   - `compaction-recovery.sh` writes a recovery marker and resets the warning cooldown
+3. **UserPromptSubmit hook**
+   - `userpromptsubmit-compaction-recovery.sh` consumes the recovery marker and injects state file and plan file references, plus a factual note that memory, rule, and skill mentions in the compact summary are summaries and that the original files remain authoritative
+   - If the state file has `## Skills Invoked`, the hook also injects guidance for rereading the relevant skills
+   - `userpromptsubmit-compact-plus-reminder.sh` consumes warn markers and injects a lightweight notification plus a three-line state recitation when available
+4. **SessionStart hook**
+   - `sessionstart-export-session-id.sh` writes `export CLAUDE_CODE_SESSION_ID=<id>` to `$CLAUDE_ENV_FILE` so the `/compact-plus` skill can obtain the session id through the bundled `scripts/get-session-id.sh` wrapper without depending on any file outside the plugin
+5. **Manual fallback (`/compact-plus` skill)**
+   - The agent follows the `SKILL.md` 10-section procedure and writes the state file manually
+
+## State File Sections
+
+State files start with `# Compact Prep State` and use the same 10-section order in both the manual skill and LLM-generated output.
+
+1. `## Active Plan`
+2. `## Current Phase`
+3. `## TaskList Summary`
+4. `## Session Decisions`
+5. `## Constraints and Blockers`
+6. `## Worker Topology`
+7. `## Skills Invoked`
+8. `## Editing Files`
+9. `## Failed Attempts`
+10. `## Recovery Notes`
+
+## Marker Files
+
+| path | writer | reader | Purpose |
+|---|---|---|---|
+| `${TMPDIR}/claude-compact-state/<session_id>.md` | `precompact-state-summary.sh` / `/compact-plus` skill | recovery hook / agent | Pre-compaction state |
+| `${TMPDIR}/claude-compact-state-offset/<session_id>` | `precompact-state-summary.sh` | `precompact-state-summary.sh` | Incremental byte offset |
+| `${TMPDIR}/claude-compact-state-counter/<session_id>` | `precompact-state-summary.sh` | `precompact-state-summary.sh` | Refresh cycle counter |
+| `${TMPDIR}/claude-compacted/<session_id>` | `compaction-recovery.sh` | `userpromptsubmit-compaction-recovery.sh` | PostCompact marker |
+| `${TMPDIR}/claude-compact-warn/<session_id>` | base repo `statusline.sh` | `userpromptsubmit-compact-plus-reminder.sh` | Threshold warning |
+| `${TMPDIR}/claude-compact-warned/<session_id>` | `userpromptsubmit-compact-plus-reminder.sh` | statusline / recovery hook | Notification cooldown |
+| `${TMPDIR}/claude-active-plan/<session_id>` | plan-management hook | recovery hook | Active plan path |
+
+## Attribution
+
+Based on [u-ichi/compact-plus](https://github.com/u-ichi/compact-plus), with the
+survival-kit v2 patches from ZETTAI-INC. The original MIT license is retained in
+[LICENSE](./LICENSE).
+
+## Development Checks
+
+```bash
+python3 -m json.tool .claude-plugin/plugin.json >/dev/null
+python3 -m json.tool .claude-plugin/marketplace.json >/dev/null
+python3 -m json.tool hooks/hooks.json >/dev/null
+for script in hooks/*.sh scripts/*.sh; do bash -n "$script" || exit; done
+```
